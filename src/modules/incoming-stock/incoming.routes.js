@@ -17,11 +17,21 @@ const createPoSchema = z.object({
   supplier_id: z.string().uuid(),
   expected_date: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  handling_fee: z.number().nonnegative().optional(),
+  shipping_fee: z.number().nonnegative().optional(),
   items: z.array(poItemSchema).min(1, 'At least one item is required'),
 });
 
 const updateStatusSchema = z.object({
-  status: z.enum(['pending', 'in_transit', 'cancelled']),
+  status: z.enum(['pending', 'in_transit', 'received', 'cancelled']),
+});
+
+const updatePoSchema = z.object({
+  status: z.enum(['pending', 'in_transit', 'received', 'cancelled']).optional(),
+  expected_date: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  handling_fee: z.number().nonnegative().optional(),
+  shipping_fee: z.number().nonnegative().optional(),
 });
 
 const receiveSchema = z.object({
@@ -35,6 +45,7 @@ const receiveSchema = z.object({
 router.get('/', controller.list);
 router.get('/:id', controller.getOne);
 router.post('/', validate({ body: createPoSchema }), controller.create);
+router.patch('/:id', validate({ body: updatePoSchema }), controller.update);
 router.patch('/:id/status', validate({ body: updateStatusSchema }), controller.updateStatus);
 
 // Marking as received automatically updates inventory quantities + valuation

@@ -48,20 +48,27 @@ $$ language plpgsql security invoker;
 -- Inserts a PO header + its line items atomically. p_items is a JSON array:
 -- [{ "product_id": "...", "quantity_ordered": 10, "unit_cost": 5.5 }, ...]
 -- -----------------------------------------------------------------------------
+alter table if exists purchase_orders add column if not exists handling_fee numeric(12,2) not null default 0;
+alter table if exists purchase_orders add column if not exists shipping_fee numeric(12,2) not null default 0;
+alter table if exists expenses add column if not exists purchase_order_id uuid references purchase_orders(id) on delete set null;
+create unique index if not exists idx_expenses_po_category on expenses(purchase_order_id, category);
+
 create or replace function create_purchase_order(
   p_owner_id      uuid,
   p_supplier_id   uuid,
   p_expected_date date,
   p_notes         text,
   p_total_cost    numeric,
-  p_items         jsonb
+  p_items         jsonb,
+  p_handling_fee  numeric default 0,
+  p_shipping_fee  numeric default 0
 ) returns jsonb as $$
 declare
   v_po_id uuid;
   v_item  jsonb;
 begin
-  insert into purchase_orders (owner_id, supplier_id, expected_date, notes, total_cost, status)
-  values (p_owner_id, p_supplier_id, p_expected_date, p_notes, p_total_cost, 'pending')
+  insert into purchase_orders (owner_id, supplier_id, expected_date, notes, total_cost, handling_fee, shipping_fee, status)
+  values (p_owner_id, p_supplier_id, p_expected_date, p_notes, p_total_cost, p_handling_fee, p_shipping_fee, 'pending')
   returning id into v_po_id;
 
   for v_item in select * from jsonb_array_elements(p_items)
@@ -93,12 +100,17 @@ create or replace function receive_purchase_order(
   p_items    jsonb default null
 ) returns jsonb as $$
 declare
-  v_item        record;
-  v_recv_qty    integer;
-  v_new_qty     integer;
+  v_item         record;
+  v_recv_qty     integer;
+  v_new_qty      integer;
   v_all_received boolean := true;
+  v_existing_status text;
 begin
-  if not exists (select 1 from purchase_orders where id = p_po_id and owner_id = p_owner_id) then
+  select status into v_existing_status
+    from purchase_orders
+   where id = p_po_id and owner_id = p_owner_id;
+
+  if not found then
     raise exception 'Purchase order not found';
   end if;
 
@@ -141,7 +153,77 @@ begin
          received_at = case when v_all_received then now() else received_at end
    where id = p_po_id;
 
+  if v_all_received and v_existing_status != 'received' then
+    perform sync_purchase_order_expenses(p_po_id, p_owner_id);
+  end if;
+
   return jsonb_build_object('id', p_po_id, 'status', case when v_all_received then 'received' else 'in_transit' end);
+end;
+$$ language plpgsql security invoker;
+
+-- -----------------------------------------------------------------------------
+-- sync_purchase_order_expenses
+-- Inserts or updates linked expense records for a received purchase order.
+-- This keeps shipping/handling fees reflected in the financial dashboard.
+-- -----------------------------------------------------------------------------
+create or replace function sync_purchase_order_expenses(
+  p_po_id    uuid,
+  p_owner_id uuid
+) returns void as $$
+declare
+  v_handling_fee numeric := 0;
+  v_shipping_fee numeric := 0;
+  v_status text;
+  v_expense_date date;
+begin
+  select status, handling_fee, shipping_fee, received_at
+    into v_status, v_handling_fee, v_shipping_fee, v_expense_date
+  from purchase_orders
+  where id = p_po_id and owner_id = p_owner_id;
+
+  if not found or v_status != 'received' then
+    return;
+  end if;
+
+  if v_expense_date is null then
+    v_expense_date := now()::date;
+  end if;
+
+  if v_handling_fee > 0 then
+    insert into expenses (owner_id, category, description, amount, expense_date, purchase_order_id)
+    values (
+      p_owner_id,
+      'Handling Fees',
+      'Handling Fees for purchase order ' || p_po_id,
+      v_handling_fee,
+      v_expense_date,
+      p_po_id
+    )
+    on conflict (purchase_order_id, category) do update
+      set amount = excluded.amount,
+          description = excluded.description,
+          expense_date = excluded.expense_date;
+  else
+    delete from expenses where purchase_order_id = p_po_id and category = 'Handling Fees';
+  end if;
+
+  if v_shipping_fee > 0 then
+    insert into expenses (owner_id, category, description, amount, expense_date, purchase_order_id)
+    values (
+      p_owner_id,
+      'Shipping Fees',
+      'Shipping Fees for purchase order ' || p_po_id,
+      v_shipping_fee,
+      v_expense_date,
+      p_po_id
+    )
+    on conflict (purchase_order_id, category) do update
+      set amount = excluded.amount,
+          description = excluded.description,
+          expense_date = excluded.expense_date;
+  else
+    delete from expenses where purchase_order_id = p_po_id and category = 'Shipping Fees';
+  end if;
 end;
 $$ language plpgsql security invoker;
 

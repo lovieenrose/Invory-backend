@@ -8,7 +8,7 @@ const router = Router();
 router.use(requireAuth);
 
 const expenseSchema = z.object({
-  category: z.enum(['rent', 'utilities', 'shipping', 'marketing', 'salaries', 'supplies', 'software', 'other']),
+  category: z.enum(['Shipping Fees', 'Handling Fees', 'Marketing', 'Supplies', 'Salary', 'Software']),
   description: z.string().min(1),
   amount: z.number().positive(),
   expense_date: z.string(),

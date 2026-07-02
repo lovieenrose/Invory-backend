@@ -102,11 +102,16 @@ create table if not exists purchase_orders (
   supplier_id    uuid not null references suppliers(id) on delete restrict,
   status         text not null default 'pending' check (status in ('pending', 'in_transit', 'received', 'cancelled')),
   total_cost     numeric(12,2) not null default 0,
+  handling_fee   numeric(12,2) not null default 0,
+  shipping_fee   numeric(12,2) not null default 0,
   expected_date  date,
   received_at    timestamptz,
   notes          text,
   created_at     timestamptz not null default now()
 );
+
+alter table if exists purchase_orders add column if not exists handling_fee numeric(12,2) not null default 0;
+alter table if exists purchase_orders add column if not exists shipping_fee numeric(12,2) not null default 0;
 
 create table if not exists purchase_order_items (
   id                 uuid primary key default gen_random_uuid(),
@@ -163,16 +168,18 @@ create index if not exists idx_soi_product on sales_order_items(product_id);
 -- expenses — Financial Dashboard module
 -- -----------------------------------------------------------------------------
 create table if not exists expenses (
-  id           uuid primary key default gen_random_uuid(),
-  owner_id     uuid not null references auth.users(id) on delete cascade,
-  category     text not null,
-  description  text not null,
-  amount       numeric(12,2) not null check (amount > 0),
-  expense_date date not null,
-  created_at   timestamptz not null default now()
+  id               uuid primary key default gen_random_uuid(),
+  owner_id         uuid not null references auth.users(id) on delete cascade,
+  category         text not null,
+  description      text not null,
+  amount           numeric(12,2) not null check (amount > 0),
+  expense_date     date not null,
+  purchase_order_id uuid references purchase_orders(id) on delete set null,
+  created_at       timestamptz not null default now()
 );
 
 create index if not exists idx_expenses_owner_date on expenses(owner_id, expense_date desc);
+create unique index if not exists idx_expenses_po_category on expenses(purchase_order_id, category);
 
 -- -----------------------------------------------------------------------------
 -- updated_at trigger helper
