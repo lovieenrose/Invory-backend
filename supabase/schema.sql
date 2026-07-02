@@ -15,7 +15,7 @@ create table if not exists business_profiles (
   owner_id      uuid primary key references auth.users(id) on delete cascade,
   business_name text not null,
   full_name     text,
-  currency      text not null default 'USD',
+  currency      text not null default 'PHP',
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
