@@ -1,9 +1,15 @@
 const app = require('./app');
 const env = require('./config/env');
+const { scheduleRateUpdates } = require('./services/exchangeRateService');
 
 const server = app.listen(env.port, () => {
   // eslint-disable-next-line no-console
   console.log(`🚀 Invory API running in ${env.nodeEnv} mode on port ${env.port}`);
+
+  // Initialize exchange rate updates (every 60 minutes)
+  if (env.nodeEnv !== 'test') {
+    scheduleRateUpdates(60);
+  }
 });
 
 // Graceful shutdown
