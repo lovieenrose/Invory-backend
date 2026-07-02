@@ -16,5 +16,7 @@ router.use('/incoming-stock', require('../modules/incoming-stock/incoming.routes
 router.use('/sales', require('../modules/sales/sales.routes'));
 router.use('/financials', require('../modules/financials/financials.routes'));
 router.use('/uploads', require('../modules/uploads/uploads.routes'));
+router.use('/currencies', require('../modules/currencies/currencies.routes'));
+router.use('/settings', require('../modules/settings/settings.routes'));
 
 module.exports = router;
