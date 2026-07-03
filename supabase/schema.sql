@@ -75,6 +75,32 @@ create index if not exists idx_products_category on products(category_id);
 create index if not exists idx_products_low_stock on products(owner_id, stock_quantity, reorder_level);
 
 -- -----------------------------------------------------------------------------
+-- product_sets + product_set_items — reusable bundles for POS quick access
+-- -----------------------------------------------------------------------------
+create table if not exists product_sets (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    uuid not null references auth.users(id) on delete cascade,
+  name        text not null,
+  icon        text,
+  color       text,
+  sort_order  integer not null default 0,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (owner_id, name)
+);
+
+create table if not exists product_set_items (
+  id             uuid primary key default gen_random_uuid(),
+  product_set_id uuid not null references product_sets(id) on delete cascade,
+  product_id     uuid not null references products(id) on delete restrict,
+  quantity       integer not null check (quantity > 0)
+);
+
+create index if not exists idx_product_sets_owner on product_sets(owner_id, sort_order);
+create index if not exists idx_product_set_items_set on product_set_items(product_set_id);
+create index if not exists idx_product_set_items_product on product_set_items(product_id);
+
+-- -----------------------------------------------------------------------------
 -- stock_adjustments — full audit trail for every inventory quantity change,
 -- regardless of source (manual correction, purchase receipt, sale).
 -- -----------------------------------------------------------------------------
