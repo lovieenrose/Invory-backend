@@ -24,6 +24,10 @@ module.exports = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT, 10) || 5000,
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  clientUrls: (process.env.CLIENT_URL || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
 
   supabase: {
     url: process.env.SUPABASE_URL,
