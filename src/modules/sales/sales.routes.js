@@ -20,7 +20,7 @@ const createSaleSchema = z.object({
   customer_contact: z.string().optional().nullable(),
   discount: z.number().nonnegative().default(0),
   shipping_fee: z.number().nonnegative().default(0),
-  payment_method: z.enum(['maya', 'maribank', 'gotyme', 'gcash', 'bpi', 'cash', 'others']).default('maya'),
+  payment_method: z.enum(['bank_transfer', 'gcash', 'maya', 'cash', 'cod', 'others', 'maribank', 'gotyme', 'bpi']).default('bank_transfer'),
   notes: z.string().optional().nullable(),
   items: z.array(saleItemSchema).min(1, 'At least one item is required'),
 });
