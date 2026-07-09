@@ -7,6 +7,7 @@ const list = asyncHandler(async (req, res) => {
 
   const from = (parseInt(page, 10) - 1) * parseInt(pageSize, 10);
   const to = from + parseInt(pageSize, 10) - 1;
+  const lowStockOnly = lowStock === 'true';
 
   let query = req.db
     .from('products')
@@ -15,18 +16,20 @@ const list = asyncHandler(async (req, res) => {
 
   if (search) query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%,barcode.ilike.%${search}%`);
   if (categoryId) query = query.eq('category_id', categoryId);
-  // low_stock is computed (stock_quantity <= reorder_level); Postgres can't
-  // compare two columns via the JS filter builder, so we use a raw filter.
-  if (lowStock === 'true') query = query.filter('stock_quantity', 'lte', 'reorder_level');
 
-  const { data, error, count } = await query.order('name').range(from, to);
+  const { data, error, count } = await (lowStockOnly ? query.order('name') : query.order('name').range(from, to));
 
   if (error) throw ApiError.internal(error.message);
 
-  return new ApiResponse(200, data, 'Success', {
+  const filteredData = lowStockOnly
+    ? (data || []).filter((product) => Number(product.stock_quantity) <= Number(product.reorder_level))
+    : data;
+  const pagedData = lowStockOnly ? filteredData.slice(from, to + 1) : filteredData;
+
+  return new ApiResponse(200, pagedData, 'Success', {
     page: parseInt(page, 10),
     pageSize: parseInt(pageSize, 10),
-    total: count,
+    total: lowStockOnly ? filteredData.length : count,
   }).send(res);
 });
 

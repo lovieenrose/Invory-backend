@@ -52,16 +52,17 @@ async function computeOrderEconomics(db, ownerId, items) {
 }
 
 const preview = asyncHandler(async (req, res) => {
-  const { items, discount = 0 } = req.body;
+  const { items, discount = 0, shipping_fee: shippingFee = 0 } = req.body;
   const { lineItems, subtotal, totalCost } = await computeOrderEconomics(req.db, req.user.id, items);
 
-  const total = subtotal - discount;
+  const total = subtotal + shippingFee - discount;
   const grossProfit = total - totalCost;
   const marginPct = total > 0 ? (grossProfit / total) * 100 : 0;
 
   return new ApiResponse(200, {
     items: lineItems,
     subtotal,
+    shipping_fee: shippingFee,
     discount,
     total_cost: totalCost,
     total,
@@ -79,11 +80,15 @@ const preview = asyncHandler(async (req, res) => {
  * order creation never happen independently of each other.
  */
 const checkout = asyncHandler(async (req, res) => {
-  const { customer_name: customerName, customer_contact: customerContact, discount = 0, payment_method: paymentMethod, notes, items } = req.body;
+  const { customer_name: customerName, customer_contact: customerContact, discount = 0, shipping_fee: shippingFee = 0, payment_method: paymentMethod, notes, items } = req.body;
 
   // Validate & price the order first so we fail fast with a clear message
   // before hitting the DB function.
-  await computeOrderEconomics(req.db, req.user.id, items);
+  const { subtotal, totalCost } = await computeOrderEconomics(req.db, req.user.id, items);
+  const total = subtotal + shippingFee - discount;
+  const grossProfit = total - totalCost;
+  const marginPct = total > 0 ? (grossProfit / total) * 100 : 0;
+  const checkoutNotes = `[SHIPPING_FEE:${shippingFee}]${notes ? ` ${notes}` : ''}`;
 
   const { data, error } = await req.db.rpc('create_sale_order', {
     p_owner_id: req.user.id,
@@ -91,12 +96,31 @@ const checkout = asyncHandler(async (req, res) => {
     p_customer_contact: customerContact || null,
     p_discount: discount,
     p_payment_method: paymentMethod,
-    p_notes: notes || null,
+    p_notes: checkoutNotes,
     p_items: items,
   });
 
   if (error) throw ApiError.badRequest(error.message);
-  return new ApiResponse(201, data, 'Sale completed').send(res, 201);
+
+  const orderId = data?.id;
+  if (orderId) {
+    const { error: updateError } = await req.db
+      .from('sales_orders')
+      .update({
+        subtotal,
+        discount,
+        total,
+        total_cost: totalCost,
+        gross_profit: grossProfit,
+        margin_pct: Number(marginPct.toFixed(2)),
+      })
+      .eq('id', orderId)
+      .eq('owner_id', req.user.id);
+
+    if (updateError) throw ApiError.badRequest(updateError.message);
+  }
+
+  return new ApiResponse(201, { ...data, shipping_fee: shippingFee, total }, 'Sale completed').send(res, 201);
 });
 
 const list = asyncHandler(async (req, res) => {
@@ -131,6 +155,79 @@ const getOne = asyncHandler(async (req, res) => {
   return new ApiResponse(200, data).send(res);
 });
 
+const reverse = asyncHandler(async (req, res) => {
+  const { reason } = req.body;
+
+  const { data: order, error: orderError } = await req.db
+    .from('sales_orders')
+    .select('*, items:sales_order_items(*)')
+    .eq('id', req.params.id)
+    .eq('owner_id', req.user.id)
+    .single();
+
+  if (orderError || !order) throw ApiError.notFound('Order not found');
+  if ((order.notes || '').startsWith('[REVERSED]')) throw ApiError.conflict('This sale has already been reversed.');
+
+  const productIds = (order.items || []).map((item) => item.product_id);
+  const { data: products, error: productsError } = await req.db
+    .from('products')
+    .select('id, stock_quantity')
+    .eq('owner_id', req.user.id)
+    .in('id', productIds);
+
+  if (productsError) throw ApiError.internal(productsError.message);
+  const productMap = new Map((products || []).map((product) => [product.id, product]));
+
+  for (const item of order.items || []) {
+    const product = productMap.get(item.product_id);
+    if (!product) throw ApiError.badRequest(`Product ${item.product_id} not found`);
+    const resultingQty = Number(product.stock_quantity) + Number(item.quantity);
+
+    const { error: updateError } = await req.db
+      .from('products')
+      .update({ stock_quantity: resultingQty })
+      .eq('id', item.product_id)
+      .eq('owner_id', req.user.id);
+
+    if (updateError) throw ApiError.badRequest(updateError.message);
+
+    const { error: adjustmentError } = await req.db
+      .from('stock_adjustments')
+      .insert({
+        owner_id: req.user.id,
+        product_id: item.product_id,
+        change: item.quantity,
+        resulting_qty: resultingQty,
+        reason: 'returned',
+        source: 'sale_reversal',
+        source_id: order.id,
+        notes: reason || `Reversed sale ${order.order_number}`,
+      });
+
+    if (adjustmentError) throw ApiError.badRequest(adjustmentError.message);
+  }
+
+  const reversedNote = `[REVERSED] ${new Date().toISOString()}${reason ? ` — ${reason}` : ''}${order.notes ? `\n${order.notes}` : ''}`;
+  const { data, error } = await req.db
+    .from('sales_orders')
+    .update({
+      subtotal: 0,
+      discount: 0,
+      total: 0,
+      total_cost: 0,
+      gross_profit: 0,
+      margin_pct: 0,
+      notes: reversedNote,
+    })
+    .eq('id', order.id)
+    .eq('owner_id', req.user.id)
+    .select('*, items:sales_order_items(*)')
+    .single();
+
+  if (error) throw ApiError.badRequest(error.message);
+  return new ApiResponse(200, data, 'Sale reversed and stock restored').send(res);
+});
+
 /**
  * Quick aggregate used by the POS screen (today's sales count/revenue) —
  * heavier dashboard aggregation lives in the financials module.
@@ -157,4 +254,4 @@ const summary = asyncHandler(async (req, res) => {
   }).send(res);
 });
 
-module.exports = { preview, checkout, list, getOne, summary };
+module.exports = { preview, checkout, list, getOne, reverse, summary };

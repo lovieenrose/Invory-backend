@@ -19,9 +19,14 @@ const createSaleSchema = z.object({
   customer_name: z.string().optional().nullable(),
   customer_contact: z.string().optional().nullable(),
   discount: z.number().nonnegative().default(0),
-  payment_method: z.enum(['cash', 'card', 'bank_transfer', 'ewallet', 'other']).default('cash'),
+  shipping_fee: z.number().nonnegative().default(0),
+  payment_method: z.enum(['maya', 'maribank', 'gotyme', 'gcash', 'bpi', 'cash', 'others']).default('maya'),
   notes: z.string().optional().nullable(),
   items: z.array(saleItemSchema).min(1, 'At least one item is required'),
+});
+
+const reverseSaleSchema = z.object({
+  reason: z.string().optional().nullable(),
 });
 
 const querySchema = z.object({
@@ -35,6 +40,7 @@ const querySchema = z.object({
 router.get('/', validate({ query: querySchema }), controller.list);
 router.get('/summary', controller.summary);
 router.get('/:id', controller.getOne);
+router.post('/:id/reverse', validate({ body: reverseSaleSchema }), controller.reverse);
 
 // POST /api/sales/preview — compute totals (COGS, revenue, margin) without committing stock
 router.post('/preview', validate({ body: createSaleSchema }), controller.preview);
